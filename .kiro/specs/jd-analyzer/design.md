@@ -559,7 +559,7 @@ class ParserAgent(MCPAgent):
 
 ```python
 class EvaluatorAgent(MCPAgent):
-    """质量评估Agent"""
+    """质量评估Agent - 支持综合评估"""
     
     def __init__(self, mcp_server: MCPServer, llm_client):
         super().__init__(
@@ -570,16 +570,19 @@ class EvaluatorAgent(MCPAgent):
         )
         
         self.register_handler("evaluate_quality", self.handle_evaluate_quality)
+        self.register_handler("update_evaluation", self.handle_update_evaluation)
         self.evaluation_models = {
             "standard": StandardEvaluationModel(),
             "mercer_ipe": MercerIPEModel(),
             "factor_comparison": FactorComparisonModel()
         }
+        self.comprehensive_evaluator = ComprehensiveEvaluator(llm_client)
     
     async def handle_evaluate_quality(self, message: MCPMessage):
-        """处理质量评估请求"""
+        """处理质量评估请求 - 综合三个维度"""
         jd_id = message.payload.get("jd_id")
         model_type = message.payload.get("model_type", "standard")
+        category_level3_id = message.payload.get("category_level3_id")
         
         # 从数据Agent获取JD数据
         jd_response = await self.send_request(
@@ -591,11 +594,32 @@ class EvaluatorAgent(MCPAgent):
         
         jd_data = jd_response.payload["jd"]
         
+        # 获取分类标签（如果有第三层级分类）
+        category_tags = []
+        if category_level3_id:
+            tags_response = await self.send_request(
+                receiver="data_manager",
+                action="get_category_tags",
+                payload={"category_id": category_level3_id},
+                context_id=message.context_id
+            )
+            category_tags = tags_response.payload.get("tags", [])
+        
         # 选择评估模型
         model = self.evaluation_models[model_type]
         
-        # 执行评估
-        evaluation_result = await model.evaluate(jd_data, self.llm)
+        # 执行综合评估（整合三个维度）
+        evaluation_result = await self.comprehensive_evaluator.comprehensive_evaluate(
+            jd_data,
+            model,
+            category_tags
+        )
+        
+        # 添加元数据
+        evaluation_result["jd_id"] = jd_id
+        evaluation_result["model_type"] = model_type
+        evaluation_result["is_manually_modified"] = False
+        evaluation_result["manual_modifications"] = []
         
         # 保存评估结果
         await self.send_request(
@@ -610,6 +634,58 @@ class EvaluatorAgent(MCPAgent):
         
         # 返回结果
         await self.send_response(message, evaluation_result)
+    
+    async def handle_update_evaluation(self, message: MCPMessage):
+        """处理手动修改评估结果的请求"""
+        jd_id = message.payload.get("jd_id")
+        modifications = message.payload.get("modifications", {})
+        reason = message.payload.get("reason", "")
+        
+        # 获取现有评估结果
+        eval_response = await self.send_request(
+            receiver="data_manager",
+            action="get_evaluation",
+            payload={"jd_id": jd_id},
+            context_id=message.context_id
+        )
+        
+        evaluation = eval_response.payload["evaluation"]
+        
+        # 记录修改历史
+        modification_record = {
+            "timestamp": time.time(),
+            "modified_fields": modifications,
+            "reason": reason,
+            "original_values": {}
+        }
+        
+        # 应用修改并记录原始值
+        for field, new_value in modifications.items():
+            if field in evaluation:
+                modification_record["original_values"][field] = evaluation[field]
+                evaluation[field] = new_value
+        
+        # 标记为手动修改
+        evaluation["is_manually_modified"] = True
+        evaluation["manual_modifications"].append(modification_record)
+        evaluation["updated_at"] = datetime.now()
+        
+        # 保存更新后的评估结果
+        await self.send_request(
+            receiver="data_manager",
+            action="save_evaluation",
+            payload={
+                "jd_id": jd_id,
+                "evaluation": evaluation
+            },
+            context_id=message.context_id
+        )
+        
+        # 返回结果
+        await self.send_response(message, {
+            "success": True,
+            "evaluation": evaluation
+        })
 ```
 
 ##### 2.4 优化建议Agent（OptimizerAgent）
@@ -634,7 +710,7 @@ class EvaluatorAgent(MCPAgent):
 
 ```python
 class DataManagerAgent(MCPAgent):
-    """数据管理Agent"""
+    """数据管理Agent - 支持企业、分类和标签管理"""
     
     def __init__(self, mcp_server: MCPServer, db_client):
         super().__init__(
@@ -646,14 +722,34 @@ class DataManagerAgent(MCPAgent):
         
         self.db = db_client
         
+        # JD相关
         self.register_handler("save_jd", self.handle_save_jd)
         self.register_handler("get_jd", self.handle_get_jd)
+        
+        # 评估相关
         self.register_handler("save_evaluation", self.handle_save_evaluation)
+        self.register_handler("get_evaluation", self.handle_get_evaluation)
+        
+        # 企业相关
+        self.register_handler("save_company", self.handle_save_company)
+        self.register_handler("get_company", self.handle_get_company)
+        self.register_handler("get_all_companies", self.handle_get_all_companies)
+        self.register_handler("delete_company", self.handle_delete_company)
+        
+        # 分类相关
+        self.register_handler("save_category", self.handle_save_category)
+        self.register_handler("get_all_categories", self.handle_get_all_categories)
+        self.register_handler("get_company_categories", self.handle_get_company_categories)
+        self.register_handler("update_jd_category", self.handle_update_jd_category)
+        
+        # 标签相关
+        self.register_handler("save_category_tag", self.handle_save_category_tag)
+        self.register_handler("get_category_tags", self.handle_get_category_tags)
+        self.register_handler("delete_category_tag", self.handle_delete_category_tag)
+        
+        # 其他
         self.register_handler("save_questionnaire", self.handle_save_questionnaire)
         self.register_handler("save_match_result", self.handle_save_match_result)
-        self.register_handler("get_all_categories", self.handle_get_all_categories)
-        self.register_handler("save_category", self.handle_save_category)
-        self.register_handler("update_jd_category", self.handle_update_jd_category)
     
     async def handle_save_jd(self, message: MCPMessage):
         """保存JD数据"""
@@ -667,11 +763,58 @@ class DataManagerAgent(MCPAgent):
         jd_id = message.payload.get("jd_id")
         jd_data = await self.db.get_jd(jd_id)
         
+        # 如果有第三层级分类，获取关联的标签
+        if jd_data.get("category_level3_id"):
+            tags = await self.db.get_category_tags(jd_data["category_level3_id"])
+            jd_data["category_tags"] = tags
+        
         await self.send_response(message, {"jd": jd_data})
+    
+    async def handle_save_evaluation(self, message: MCPMessage):
+        """保存评估结果"""
+        jd_id = message.payload.get("jd_id")
+        evaluation = message.payload.get("evaluation")
+        await self.db.save_evaluation(jd_id, evaluation)
+        await self.send_response(message, {"success": True})
+    
+    async def handle_get_evaluation(self, message: MCPMessage):
+        """获取评估结果"""
+        jd_id = message.payload.get("jd_id")
+        evaluation = await self.db.get_evaluation(jd_id)
+        await self.send_response(message, {"evaluation": evaluation})
+    
+    async def handle_save_company(self, message: MCPMessage):
+        """保存企业"""
+        company_data = message.payload
+        company_id = await self.db.insert_company(company_data)
+        await self.send_response(message, {"company_id": company_id})
+    
+    async def handle_get_company(self, message: MCPMessage):
+        """获取企业"""
+        company_id = message.payload.get("company_id")
+        company = await self.db.get_company(company_id)
+        await self.send_response(message, {"company": company})
+    
+    async def handle_get_all_companies(self, message: MCPMessage):
+        """获取所有企业"""
+        companies = await self.db.get_all_companies()
+        await self.send_response(message, {"companies": companies})
+    
+    async def handle_delete_company(self, message: MCPMessage):
+        """删除企业"""
+        company_id = message.payload.get("company_id")
+        await self.db.delete_company(company_id)
+        await self.send_response(message, {"success": True})
     
     async def handle_get_all_categories(self, message: MCPMessage):
         """获取所有职位分类"""
         categories = await self.db.get_all_categories()
+        await self.send_response(message, {"categories": categories})
+    
+    async def handle_get_company_categories(self, message: MCPMessage):
+        """获取企业的职位分类"""
+        company_id = message.payload.get("company_id")
+        categories = await self.db.get_company_categories(company_id)
         await self.send_response(message, {"categories": categories})
     
     async def handle_save_category(self, message: MCPMessage):
@@ -685,6 +828,24 @@ class DataManagerAgent(MCPAgent):
         jd_id = message.payload.get("jd_id")
         category_ids = message.payload.get("category_ids")
         await self.db.update_jd_category(jd_id, category_ids)
+        await self.send_response(message, {"success": True})
+    
+    async def handle_save_category_tag(self, message: MCPMessage):
+        """保存分类标签"""
+        tag_data = message.payload
+        tag_id = await self.db.insert_category_tag(tag_data)
+        await self.send_response(message, {"tag_id": tag_id})
+    
+    async def handle_get_category_tags(self, message: MCPMessage):
+        """获取分类的所有标签"""
+        category_id = message.payload.get("category_id")
+        tags = await self.db.get_category_tags(category_id)
+        await self.send_response(message, {"tags": tags})
+    
+    async def handle_delete_category_tag(self, message: MCPMessage):
+        """删除分类标签"""
+        tag_id = message.payload.get("tag_id")
+        await self.db.delete_category_tag(tag_id)
         await self.send_response(message, {"success": True})
 ```
 
@@ -760,16 +921,34 @@ class EvaluationModel(str, Enum):
     MERCER_IPE = "mercer_ipe"  # 美世国际职位评估法
     FACTOR_COMPARISON = "factor_comparison"  # 因素比较法
 
+class Company(BaseModel):
+    """企业模型"""
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+class CategoryTag(BaseModel):
+    """分类标签模型（仅用于第三层级分类）"""
+    id: str
+    category_id: str  # 所属分类ID（必须是第三层级）
+    name: str
+    tag_type: str  # 战略重要性、业务价值、技能稀缺性、市场竞争度、发展潜力、风险等级
+    description: str  # 标签描述和对评估的影响说明
+    created_at: datetime
+
 class JobCategory(BaseModel):
     """职位分类模型（支持3层级）"""
     id: str
+    company_id: str  # 所属企业ID
     name: str
     level: int = Field(ge=1, le=3)  # 1=一级, 2=二级, 3=三级
     parent_id: Optional[str]  # 父级分类ID
     description: Optional[str]
-    # 样本职位JD（仅第三层级）
-    sample_jd_ids: List[str] = []  # 1-2个典型样本JD的ID
+    # 标签（仅第三层级）
+    tags: List[CategoryTag] = []
     created_at: datetime
+    updated_at: datetime
 
 class JobDescription(BaseModel):
     """岗位JD模型"""
@@ -787,6 +966,8 @@ class JobDescription(BaseModel):
     category_level1_id: Optional[str]  # 一级分类
     category_level2_id: Optional[str]  # 二级分类
     category_level3_id: Optional[str]  # 三级分类
+    # 关联的分类标签（从第三层级分类继承）
+    category_tags: List[CategoryTag] = []
     created_at: datetime
     updated_at: datetime
 
@@ -803,9 +984,24 @@ class EvaluationResult(BaseModel):
     jd_id: str
     model_type: EvaluationModel
     quality_score: QualityScore
+    # 综合评估结果
+    overall_score: float = Field(ge=0, le=100)  # 综合质量分数
+    company_value: str  # 企业价值：高价值/中价值/低价值
+    is_core_position: bool  # 是否核心岗位
+    # 三个评估维度的贡献度
+    dimension_contributions: Dict[str, float] = {
+        "jd_content": 0.0,  # JD内容贡献度
+        "evaluation_template": 0.0,  # 评估模板贡献度
+        "category_tags": 0.0  # 分类标签贡献度
+    }
+    # 详细分析
     position_value: Optional[Dict[str, float]]  # 岗位价值评估
     recommendations: List[str]
+    # 手动修改记录
+    is_manually_modified: bool = False
+    manual_modifications: List[Dict[str, any]] = []  # 修改历史
     created_at: datetime
+    updated_at: datetime
 
 class QuestionType(str, Enum):
     """问题类型"""
@@ -861,6 +1057,94 @@ class CustomTemplate(BaseModel):
     template_type: str  # parsing, evaluation, questionnaire
     config: Dict[str, any]
     created_at: datetime
+```
+
+### 数据库Schema
+
+```sql
+-- 企业表
+CREATE TABLE companies (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 职位分类表（支持3层级）
+CREATE TABLE job_categories (
+    id TEXT PRIMARY KEY,
+    company_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    level INTEGER NOT NULL CHECK (level >= 1 AND level <= 3),
+    parent_id TEXT,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES job_categories(id) ON DELETE CASCADE
+);
+
+-- 分类标签表（仅用于第三层级分类）
+CREATE TABLE category_tags (
+    id TEXT PRIMARY KEY,
+    category_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    tag_type TEXT NOT NULL,  -- 战略重要性、业务价值、技能稀缺性等
+    description TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_id) REFERENCES job_categories(id) ON DELETE CASCADE,
+    CHECK ((SELECT level FROM job_categories WHERE id = category_id) = 3)
+);
+
+-- 岗位JD表
+CREATE TABLE job_descriptions (
+    id TEXT PRIMARY KEY,
+    job_title TEXT NOT NULL,
+    department TEXT,
+    location TEXT,
+    responsibilities TEXT,  -- JSON array
+    required_skills TEXT,  -- JSON array
+    preferred_skills TEXT,  -- JSON array
+    qualifications TEXT,  -- JSON array
+    custom_fields TEXT,  -- JSON object
+    raw_text TEXT NOT NULL,
+    category_level1_id TEXT,
+    category_level2_id TEXT,
+    category_level3_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_level1_id) REFERENCES job_categories(id),
+    FOREIGN KEY (category_level2_id) REFERENCES job_categories(id),
+    FOREIGN KEY (category_level3_id) REFERENCES job_categories(id)
+);
+
+-- 评估结果表
+CREATE TABLE evaluation_results (
+    id TEXT PRIMARY KEY,
+    jd_id TEXT NOT NULL,
+    model_type TEXT NOT NULL,
+    overall_score REAL NOT NULL,
+    company_value TEXT NOT NULL,  -- 高价值/中价值/低价值
+    is_core_position BOOLEAN NOT NULL,
+    dimension_contributions TEXT,  -- JSON object
+    dimension_details TEXT,  -- JSON object
+    comprehensive_analysis TEXT,
+    is_manually_modified BOOLEAN DEFAULT FALSE,
+    manual_modifications TEXT,  -- JSON array
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (jd_id) REFERENCES job_descriptions(id) ON DELETE CASCADE
+);
+
+-- 索引
+CREATE INDEX idx_categories_company ON job_categories(company_id);
+CREATE INDEX idx_categories_parent ON job_categories(parent_id);
+CREATE INDEX idx_categories_level ON job_categories(level);
+CREATE INDEX idx_tags_category ON category_tags(category_id);
+CREATE INDEX idx_jd_category1 ON job_descriptions(category_level1_id);
+CREATE INDEX idx_jd_category2 ON job_descriptions(category_level2_id);
+CREATE INDEX idx_jd_category3 ON job_descriptions(category_level3_id);
+CREATE INDEX idx_evaluation_jd ON evaluation_results(jd_id);
 ```
 
 ## 核心功能设计
@@ -1324,6 +1608,216 @@ class FactorComparisonModel(EvaluationModelBase):
         """基于因素比较法评估"""
         # 类似实现
         pass
+
+class ComprehensiveEvaluator:
+    """综合评估器 - 整合JD内容、评估模板和分类标签三个维度"""
+    
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        # 三个维度的默认权重（可配置）
+        self.dimension_weights = {
+            "jd_content": 0.40,  # JD内容权重
+            "evaluation_template": 0.30,  # 评估模板权重
+            "category_tags": 0.30  # 分类标签权重
+        }
+    
+    async def comprehensive_evaluate(
+        self,
+        jd_data: Dict,
+        evaluation_model: EvaluationModelBase,
+        category_tags: List[CategoryTag]
+    ) -> Dict:
+        """执行综合评估"""
+        
+        # 1. 基于评估模板评估JD内容
+        template_result = await evaluation_model.evaluate(jd_data, self.llm)
+        
+        # 2. 分析分类标签对评估的影响
+        tag_analysis = await self._analyze_category_tags(category_tags, jd_data)
+        
+        # 3. 综合三个维度计算最终评分
+        comprehensive_result = await self._integrate_dimensions(
+            jd_data,
+            template_result,
+            tag_analysis
+        )
+        
+        return comprehensive_result
+    
+    async def _analyze_category_tags(
+        self,
+        tags: List[CategoryTag],
+        jd_data: Dict
+    ) -> Dict:
+        """分析分类标签对评估的影响"""
+        
+        if not tags:
+            return {
+                "tag_score": 50.0,  # 默认中等分数
+                "value_impact": "neutral",
+                "core_position_likelihood": 0.5,
+                "analysis": "未设置分类标签"
+            }
+        
+        # 构建标签分析Prompt
+        prompt = f"""
+        作为HR专家，请分析以下职位分类标签对岗位评估的影响：
+        
+        岗位信息：
+        {json.dumps(jd_data, ensure_ascii=False, indent=2)}
+        
+        分类标签：
+        {json.dumps([{
+            "name": tag.name,
+            "type": tag.tag_type,
+            "description": tag.description
+        } for tag in tags], ensure_ascii=False, indent=2)}
+        
+        请分析：
+        1. 这些标签如何影响岗位的企业价值评级？
+        2. 这些标签是否表明该岗位是核心岗位？
+        3. 标签与JD内容是否一致？
+        
+        返回JSON格式：
+        {{
+            "tag_score": 0-100分数,
+            "value_impact": "positive/neutral/negative",
+            "core_position_likelihood": 0-1的概率,
+            "analysis": "详细分析",
+            "tag_jd_consistency": "一致性分析"
+        }}
+        """
+        
+        response = await self.llm.generate(prompt)
+        return json.loads(response)
+    
+    async def _integrate_dimensions(
+        self,
+        jd_data: Dict,
+        template_result: Dict,
+        tag_analysis: Dict
+    ) -> Dict:
+        """整合三个维度的评估结果"""
+        
+        # 计算JD内容得分（基于模板评估的质量分数）
+        jd_content_score = template_result.get("overall_score", 0)
+        
+        # 计算评估模板得分（基于模板的加权分数）
+        template_score = template_result.get("weighted_score", jd_content_score)
+        
+        # 计算分类标签得分
+        tag_score = tag_analysis.get("tag_score", 50.0)
+        
+        # 综合计算最终分数
+        overall_score = (
+            jd_content_score * self.dimension_weights["jd_content"] +
+            template_score * self.dimension_weights["evaluation_template"] +
+            tag_score * self.dimension_weights["category_tags"]
+        )
+        
+        # 判断企业价值
+        company_value = self._determine_company_value(
+            overall_score,
+            tag_analysis.get("value_impact", "neutral")
+        )
+        
+        # 判断是否核心岗位
+        is_core_position = self._determine_core_position(
+            overall_score,
+            tag_analysis.get("core_position_likelihood", 0.5),
+            tag_analysis
+        )
+        
+        # 构建综合评估Prompt
+        integration_prompt = f"""
+        请综合以下三个维度的评估结果，生成最终的岗位评估报告：
+        
+        1. JD内容评估（权重{self.dimension_weights["jd_content"]*100}%）：
+        分数：{jd_content_score}
+        分析：{template_result.get("analysis", "")}
+        
+        2. 评估模板评估（权重{self.dimension_weights["evaluation_template"]*100}%）：
+        分数：{template_score}
+        维度得分：{template_result.get("dimension_scores", {})}
+        
+        3. 分类标签评估（权重{self.dimension_weights["category_tags"]*100}%）：
+        分数：{tag_score}
+        分析：{tag_analysis.get("analysis", "")}
+        
+        综合得分：{overall_score}
+        企业价值：{company_value}
+        核心岗位：{"是" if is_core_position else "否"}
+        
+        请生成：
+        1. 详细的综合分析报告
+        2. 说明三个维度如何共同影响最终结果
+        3. 标识任何维度间的不一致或冲突
+        
+        返回JSON格式。
+        """
+        
+        integration_response = await self.llm.generate(integration_prompt)
+        integration_result = json.loads(integration_response)
+        
+        return {
+            "overall_score": overall_score,
+            "company_value": company_value,
+            "is_core_position": is_core_position,
+            "dimension_contributions": {
+                "jd_content": jd_content_score * self.dimension_weights["jd_content"],
+                "evaluation_template": template_score * self.dimension_weights["evaluation_template"],
+                "category_tags": tag_score * self.dimension_weights["category_tags"]
+            },
+            "dimension_details": {
+                "jd_content": {
+                    "score": jd_content_score,
+                    "analysis": template_result.get("analysis", "")
+                },
+                "evaluation_template": {
+                    "score": template_score,
+                    "dimension_scores": template_result.get("dimension_scores", {})
+                },
+                "category_tags": {
+                    "score": tag_score,
+                    "analysis": tag_analysis.get("analysis", ""),
+                    "consistency": tag_analysis.get("tag_jd_consistency", "")
+                }
+            },
+            "comprehensive_analysis": integration_result.get("comprehensive_analysis", ""),
+            "dimension_interactions": integration_result.get("dimension_interactions", ""),
+            "conflicts": integration_result.get("conflicts", [])
+        }
+    
+    def _determine_company_value(self, overall_score: float, value_impact: str) -> str:
+        """判断企业价值"""
+        # 基础判断
+        if overall_score >= 80:
+            base_value = "高价值"
+        elif overall_score >= 60:
+            base_value = "中价值"
+        else:
+            base_value = "低价值"
+        
+        # 根据标签影响调整
+        if value_impact == "positive" and base_value == "中价值":
+            return "高价值"
+        elif value_impact == "negative" and base_value == "中价值":
+            return "低价值"
+        
+        return base_value
+    
+    def _determine_core_position(
+        self,
+        overall_score: float,
+        tag_likelihood: float,
+        tag_analysis: Dict
+    ) -> bool:
+        """判断是否核心岗位"""
+        # 综合考虑分数和标签概率
+        score_factor = overall_score / 100.0
+        combined_likelihood = (score_factor * 0.4 + tag_likelihood * 0.6)
+        
+        return combined_likelihood >= 0.6
 ```
 
 ### 3. Agent自主决策与学习
@@ -1753,6 +2247,36 @@ async def get_evaluation(jd_id: str) -> EvaluationResult:
     """获取JD评估结果"""
     pass
 
+@app.put("/api/v1/jd/{jd_id}/evaluation")
+async def update_evaluation(
+    jd_id: str,
+    overall_score: Optional[float] = None,
+    company_value: Optional[str] = None,
+    is_core_position: Optional[bool] = None,
+    reason: Optional[str] = None
+) -> EvaluationResult:
+    """手动修改评估结果"""
+    modifications = {}
+    if overall_score is not None:
+        modifications["overall_score"] = overall_score
+    if company_value is not None:
+        modifications["company_value"] = company_value
+    if is_core_position is not None:
+        modifications["is_core_position"] = is_core_position
+    
+    # 通过MCP发送给Evaluator Agent
+    response = await send_mcp_request(
+        receiver="evaluator",
+        action="update_evaluation",
+        payload={
+            "jd_id": jd_id,
+            "modifications": modifications,
+            "reason": reason or "手动调整"
+        }
+    )
+    
+    return response["evaluation"]
+
 @app.put("/api/v1/jd/{jd_id}/category")
 async def update_jd_category(
     jd_id: str,
@@ -1763,38 +2287,88 @@ async def update_jd_category(
     """手动更新JD的分类"""
     pass
 
+# ============ 企业管理 ============
+
+@app.post("/api/v1/companies")
+async def create_company(name: str) -> Company:
+    """创建企业"""
+    pass
+
+@app.get("/api/v1/companies")
+async def list_companies() -> List[Company]:
+    """列出所有企业"""
+    pass
+
+@app.get("/api/v1/companies/{company_id}")
+async def get_company(company_id: str) -> Company:
+    """获取企业详情"""
+    pass
+
+@app.put("/api/v1/companies/{company_id}")
+async def update_company(company_id: str, name: str) -> Company:
+    """更新企业名称"""
+    pass
+
+@app.delete("/api/v1/companies/{company_id}")
+async def delete_company(company_id: str):
+    """删除企业（会同时删除该企业下的所有分类）"""
+    pass
+
 # ============ 职位分类管理 ============
 
-@app.post("/api/v1/categories")
+@app.post("/api/v1/companies/{company_id}/categories")
 async def create_category(
+    company_id: str,
     name: str,
     level: int,
     parent_id: Optional[str] = None,
-    description: Optional[str] = None,
-    sample_jd_ids: Optional[List[str]] = None
+    description: Optional[str] = None
 ) -> JobCategory:
-    """创建职位分类（支持3层级，第三层级可添加样本JD）"""
+    """在企业下创建职位分类（支持3层级）"""
     pass
 
-@app.put("/api/v1/categories/{category_id}/samples")
-async def update_category_samples(
+@app.post("/api/v1/categories/{category_id}/tags")
+async def add_category_tag(
     category_id: str,
-    sample_jd_ids: List[str]
-) -> JobCategory:
-    """更新分类的样本JD（仅第三层级，最多2个）"""
+    name: str,
+    tag_type: str,
+    description: str
+) -> CategoryTag:
+    """为第三层级分类添加标签"""
     pass
 
-@app.get("/api/v1/categories")
+@app.get("/api/v1/categories/{category_id}/tags")
+async def get_category_tags(category_id: str) -> List[CategoryTag]:
+    """获取分类的所有标签"""
+    pass
+
+@app.put("/api/v1/tags/{tag_id}")
+async def update_tag(
+    tag_id: str,
+    name: Optional[str] = None,
+    tag_type: Optional[str] = None,
+    description: Optional[str] = None
+) -> CategoryTag:
+    """更新标签"""
+    pass
+
+@app.delete("/api/v1/tags/{tag_id}")
+async def delete_tag(tag_id: str):
+    """删除标签"""
+    pass
+
+@app.get("/api/v1/companies/{company_id}/categories")
 async def list_categories(
+    company_id: str,
     level: Optional[int] = None,
     parent_id: Optional[str] = None
 ) -> List[JobCategory]:
-    """列出职位分类"""
+    """列出企业的职位分类"""
     pass
 
-@app.get("/api/v1/categories/tree")
-async def get_category_tree() -> Dict:
-    """获取完整的分类树（3层级）"""
+@app.get("/api/v1/companies/{company_id}/categories/tree")
+async def get_category_tree(company_id: str) -> Dict:
+    """获取企业的完整分类树（3层级）"""
     pass
 
 @app.put("/api/v1/categories/{category_id}")

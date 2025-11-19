@@ -173,11 +173,15 @@ class SimpleMCPClient:
         # 构建 EvaluationResult 对象
         eval_id = f"eval_{uuid.uuid4().hex[:8]}"
         
+        # 从 dimension_scores 中提取分数
+        dimension_scores = eval_result.get("dimension_scores", {})
+        
+        # 标准模型的维度映射
         quality_score = QualityScore(
             overall_score=eval_result.get("overall_score", 0.0),
-            completeness=eval_result.get("completeness", 0.0),
-            clarity=eval_result.get("clarity", 0.0),
-            professionalism=eval_result.get("professionalism", 0.0),
+            completeness=dimension_scores.get("完整性", 0.0),
+            clarity=dimension_scores.get("清晰度", 0.0),
+            professionalism=dimension_scores.get("专业性", 0.0),
             issues=eval_result.get("issues", [])
         )
         
@@ -193,8 +197,20 @@ class SimpleMCPClient:
             jd_id=jd.id,
             model_type=model_type_enum,
             quality_score=quality_score,
+            overall_score=eval_result.get("overall_score", quality_score.overall_score),  # ✅ 添加必需字段
+            company_value=eval_result.get("company_value", "中价值"),  # ✅ 添加必需字段
+            is_core_position=eval_result.get("is_core_position", False),  # ✅ 添加必需字段
+            dimension_contributions=eval_result.get("dimension_contributions", {
+                "jd_content": 40.0,
+                "evaluation_template": 30.0,
+                "category_tags": 30.0
+            }),
+            position_value=eval_result.get("position_value"),
             recommendations=eval_result.get("recommendations", []),
-            created_at=datetime.now()
+            is_manually_modified=False,
+            manual_modifications=[],
+            created_at=datetime.now(),
+            updated_at=datetime.now()
         )
         
         return {

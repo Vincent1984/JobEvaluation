@@ -118,7 +118,7 @@ async def get_jd_evaluation(jd_id: str):
         client = get_mcp_client()
         response = await client._call_agent(
             receiver="data_manager",
-            action="get_evaluation_by_jd",
+            action="get_evaluation",
             payload={"jd_id": jd_id}
         )
         
@@ -178,6 +178,96 @@ async def update_jd_category(jd_id: str, request: UpdateCategoryRequest):
         "message": "分类更新成功",
         "data": jd.model_dump()
     }
+
+
+@router.put("/{jd_id}/evaluation", response_model=Dict[str, Any])
+async def update_jd_evaluation(jd_id: str, request: Dict[str, Any]):
+    """
+    手动修改JD评估结果
+    
+    - **jd_id**: JD的唯一标识符
+    - **modifications**: 要修改的字段（overall_score, company_value, is_core_position）
+    - **reason**: 修改原因（可选）
+    
+    支持修改的字段：
+    - overall_score: 综合质量分数（0-100）
+    - company_value: 企业价值评级（高价值/中价值/低价值）
+    - is_core_position: 是否核心岗位（true/false）
+    """
+    try:
+        # 验证JD是否存在
+        jd = await mcp_client.get_jd(jd_id)
+        if not jd:
+            raise HTTPException(status_code=404, detail=f"JD {jd_id} 不存在")
+        
+        # 提取修改字段和原因
+        modifications = {}
+        reason = request.get("reason", "")
+        
+        # 支持的字段
+        allowed_fields = ["overall_score", "company_value", "is_core_position"]
+        
+        for field in allowed_fields:
+            if field in request:
+                modifications[field] = request[field]
+        
+        if not modifications:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"请提供要修改的字段。支持的字段: {', '.join(allowed_fields)}"
+            )
+        
+        # 验证字段值
+        if "overall_score" in modifications:
+            score = modifications["overall_score"]
+            if not isinstance(score, (int, float)) or score < 0 or score > 100:
+                raise HTTPException(
+                    status_code=400,
+                    detail="overall_score 必须是0-100之间的数字"
+                )
+        
+        if "company_value" in modifications:
+            value = modifications["company_value"]
+            if value not in ["高价值", "中价值", "低价值"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="company_value 必须是：高价值、中价值或低价值"
+                )
+        
+        if "is_core_position" in modifications:
+            if not isinstance(modifications["is_core_position"], bool):
+                raise HTTPException(
+                    status_code=400,
+                    detail="is_core_position 必须是布尔值"
+                )
+        
+        # 通过 EvaluatorAgent 更新评估结果
+        from ...mcp.client import get_mcp_client
+        client = get_mcp_client()
+        response = await client._call_agent(
+            receiver="evaluator",
+            action="update_evaluation",
+            payload={
+                "jd_id": jd_id,
+                "modifications": modifications,
+                "reason": reason
+            }
+        )
+        
+        if not response.payload.get("success"):
+            raise HTTPException(status_code=500, detail="更新评估结果失败")
+        
+        updated_evaluation = EvaluationResult(**response.payload["evaluation"])
+        
+        return {
+            "success": True,
+            "message": "评估结果已更新",
+            "data": updated_evaluation.model_dump()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/upload", response_model=Dict[str, Any])

@@ -21,15 +21,58 @@ class QuestionType(str, Enum):
     OPEN_ENDED = "open_ended"
 
 
+class Company(BaseModel):
+    """企业模型"""
+    id: str
+    name: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "comp_001",
+                "name": "科技有限公司",
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-01T00:00:00"
+            }
+        }
+
+
+class CategoryTag(BaseModel):
+    """分类标签模型（仅用于第三层级分类）"""
+    id: str
+    category_id: str = Field(description="所属分类ID（必须是第三层级）")
+    name: str
+    tag_type: str = Field(description="标签类型：战略重要性、业务价值、技能稀缺性、市场竞争度、发展潜力、风险等级")
+    description: str = Field(description="标签描述和对评估的影响说明")
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "tag_001",
+                "category_id": "cat_003",
+                "name": "高战略重要性",
+                "tag_type": "战略重要性",
+                "description": "该岗位对企业战略目标实现具有重要影响，评估时应提高岗位价值评级",
+                "created_at": "2024-01-01T00:00:00"
+            }
+        }
+
+
 class JobCategory(BaseModel):
     """职位分类模型（支持3层级）"""
     id: str
+    company_id: str = Field(description="所属企业ID")
     name: str
     level: int = Field(ge=1, le=3, description="分类层级: 1=一级, 2=二级, 3=三级")
     parent_id: Optional[str] = Field(None, description="父级分类ID")
     description: Optional[str] = None
     sample_jd_ids: List[str] = Field(default_factory=list, description="样本职位JD的ID（仅第三层级，1-2个）")
+    tags: List[CategoryTag] = Field(default_factory=list, description="分类标签（仅第三层级）")
     created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
     @model_validator(mode='after')
     def validate_category_rules(self):
@@ -50,18 +93,30 @@ class JobCategory(BaseModel):
             if len(self.sample_jd_ids) > 0:
                 raise ValueError('只有第三层级分类才能添加样本JD')
         
+        # 验证标签规则
+        if self.level == 3:
+            # 第三层级可以有标签
+            pass
+        else:
+            # 非第三层级不允许有标签
+            if len(self.tags) > 0:
+                raise ValueError('只有第三层级分类才能添加标签')
+        
         return self
 
     class Config:
         json_schema_extra = {
             "example": {
                 "id": "cat_001",
+                "company_id": "comp_001",
                 "name": "后端工程师",
                 "level": 3,
                 "parent_id": "cat_parent_001",
                 "description": "负责后端系统开发",
                 "sample_jd_ids": ["jd_001", "jd_002"],
-                "created_at": "2024-01-01T00:00:00"
+                "tags": [],
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-01T00:00:00"
             }
         }
 
@@ -81,6 +136,7 @@ class JobDescription(BaseModel):
     category_level1_id: Optional[str] = Field(None, description="一级分类ID")
     category_level2_id: Optional[str] = Field(None, description="二级分类ID")
     category_level3_id: Optional[str] = Field(None, description="三级分类ID")
+    category_tags: List[CategoryTag] = Field(default_factory=list, description="关联的分类标签")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
@@ -126,6 +182,40 @@ class QualityScore(BaseModel):
         }
 
 
+class ManualModification(BaseModel):
+    """手动修改记录"""
+    timestamp: datetime = Field(default_factory=datetime.now)
+    modified_fields: Dict[str, Any] = Field(default_factory=dict, description="修改的字段和新值")
+    original_values: Dict[str, Any] = Field(default_factory=dict, description="原始值")
+    reason: str = Field(default="", description="修改原因")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "timestamp": "2024-01-01T00:00:00",
+                "modified_fields": {"overall_score": 90.0, "company_value": "高价值"},
+                "original_values": {"overall_score": 85.0, "company_value": "中价值"},
+                "reason": "根据业务需求调整评分"
+            }
+        }
+
+
+class DimensionContribution(BaseModel):
+    """评估维度贡献度"""
+    jd_content: float = Field(ge=0, le=100, description="JD内容贡献度百分比")
+    evaluation_template: float = Field(ge=0, le=100, description="评估模板贡献度百分比")
+    category_tags: float = Field(ge=0, le=100, description="分类标签贡献度百分比")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jd_content": 40.0,
+                "evaluation_template": 30.0,
+                "category_tags": 30.0
+            }
+        }
+
+
 class EvaluationResult(BaseModel):
     """评估结果模型"""
     model_config = {
@@ -143,7 +233,17 @@ class EvaluationResult(BaseModel):
                     "issues": []
                 },
                 "position_value": {"影响力": 85.0, "沟通": 75.0},
-                "recommendations": ["建议补充薪资范围", "职责描述可以更具体"]
+                "recommendations": ["建议补充薪资范围", "职责描述可以更具体"],
+                "overall_score": 85.0,
+                "company_value": "高价值",
+                "is_core_position": True,
+                "dimension_contributions": {
+                    "jd_content": 40.0,
+                    "evaluation_template": 30.0,
+                    "category_tags": 30.0
+                },
+                "is_manually_modified": False,
+                "manual_modifications": []
             }
         }
     }
@@ -154,7 +254,19 @@ class EvaluationResult(BaseModel):
     quality_score: QualityScore
     position_value: Optional[Dict[str, float]] = Field(None, description="岗位价值评估")
     recommendations: List[str] = Field(default_factory=list, description="优化建议")
+    
+    # 综合评估字段
+    overall_score: float = Field(ge=0, le=100, description="综合质量分数")
+    company_value: str = Field(default="中价值", description="企业价值评级：高价值/中价值/低价值")
+    is_core_position: bool = Field(default=False, description="是否核心岗位")
+    dimension_contributions: Optional[DimensionContribution] = Field(None, description="三个维度的贡献度")
+    
+    # 手动修改相关
+    is_manually_modified: bool = Field(default=False, description="是否被手动修改过")
+    manual_modifications: List[ManualModification] = Field(default_factory=list, description="手动修改历史记录")
+    
     created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
 
 
 class Question(BaseModel):

@@ -1,8 +1,6 @@
 # 实施计划
 
 - [x] 1. 项目基础设施搭建
-
-
   - 创建项目目录结构
   - 配置Python虚拟环境和依赖管理（requirements.txt）
   - 配置环境变量文件（.env.example）
@@ -11,36 +9,45 @@
 
 - [ ] 2. 数据模型和数据库设计
   - [x] 2.1 定义Pydantic数据模型（JobDescription, JobCategory, EvaluationResult, Questionnaire等）
-
-
-
-
-
-
-
-
     - 实现所有核心数据模型类
     - 实现JobCategory模型（支持3层级，包含sample_jd_ids字段）
     - 在JobDescription中添加分类字段（category_level1_id, category_level2_id, category_level3_id）
     - 添加数据验证规则（第三层级样本JD数量限制为1-2个）
     - _需求: 1.1, 1.2, 1.3, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 2.1, 2.2, 4.1, 5.1, 5.2_
   
+  - [x] 2.1.5 更新数据模型以支持企业和分类标签
+
+
+
+
+
+    - 在src/models/schemas.py中实现Company模型（id, name, created_at, updated_at）
+    - 在src/models/schemas.py中实现CategoryTag模型（id, category_id, name, tag_type, description, created_at）
+    - 更新JobCategory模型，添加company_id字段和tags字段（List[CategoryTag]）
+    - 更新JobDescription模型，添加category_tags字段（List[CategoryTag]）
+    - 更新EvaluationResult模型，添加综合评估字段（overall_score, company_value, is_core_position, dimension_contributions, manual_modifications, is_manually_modified）
+    - _需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14, 2.29, 2.30, 2.31, 2.32, 2.33_
+  
   - [x] 2.2 创建SQLite数据库schema和ORM映射
-
-
-
-
-
-
-
-
-
-
     - 设计数据库表结构（包括job_categories表，包含sample_jd_ids字段）
     - 实现SQLAlchemy ORM模型
     - 创建数据库初始化脚本
     - 添加分类表的外键关系
     - _需求: 1.1, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 2.1, 4.1, 5.1_
+  
+-
+
+  - [x] 2.2.5 更新数据库schema以支持企业和分类标签
+
+
+
+    - 在src/models/database.py中创建CompanyDB表（id, name, created_at, updated_at）
+    - 在src/models/database.py中创建CategoryTagDB表（id, category_id, name, tag_type, description, created_at）
+    - 更新JobCategoryDB表，添加company_id外键字段
+    - 更新EvaluationResultDB表，添加综合评估字段（overall_score, company_value, is_core_position, dimension_contributions, is_manually_modified, manual_modifications）
+    - 创建必要的索引（idx_categories_company, idx_tags_category等）
+    - 编写数据库迁移脚本（scripts/migrate_db.py）
+    - _需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14, 2.29, 2.30, 2.31, 2.32, 2.33_
 
 - [ ] 3. MCP通讯层实现
 
@@ -133,13 +140,27 @@
     - _需求: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15_
   
   - [x] 5.2 实现质量评估Agent（EvaluatorAgent）
-
-
     - 实现标准评估模型
     - 实现美世国际职位评估法（Mercer IPE）
     - 实现因素比较法
     - 实现质量问题识别
     - _需求: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9_
+  
+  - [x] 5.2.5 增强EvaluatorAgent以支持综合评估和手动修改
+
+
+
+
+
+    - 在src/agents/evaluator_agent.py中创建ComprehensiveEvaluator类
+    - 实现_analyze_category_tags方法（分析分类标签对评估的影响）
+    - 实现_integrate_dimensions方法（整合JD内容、评估模板、分类标签三个维度）
+    - 实现_determine_company_value方法（判断企业价值：高价值/中价值/低价值）
+    - 实现_determine_core_position方法（判断是否核心岗位）
+    - 在EvaluatorAgent中集成ComprehensiveEvaluator，更新handle_evaluate_quality方法
+    - 实现handle_update_evaluation方法（支持手动修改评估结果）
+    - 实现修改历史记录功能（记录修改时间、修改人、修改内容、原始值）
+    - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14, 2.29, 2.30, 2.31, 2.32, 2.33_
   
   - [x] 5.3 实现优化建议Agent（OptimizerAgent）
 
@@ -165,8 +186,6 @@
     - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 5.6, 5.7, 5.8, 5.10_
   
   - [x] 5.6 实现数据管理Agent（DataManagerAgent）
-
-
     - 实现数据库CRUD操作
     - 实现数据访问接口
     - 实现职位分类的CRUD操作（包含样本JD管理）
@@ -174,6 +193,24 @@
     - 实现更新JD分类的功能
     - 实现样本JD数量验证（第三层级最多2个）
     - _需求: 1.1, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 2.1, 4.1, 5.1_
+  
+  - [x] 5.6.5 增强DataManagerAgent以支持企业和标签管理
+
+
+
+
+
+    - 在src/agents/data_manager_agent.py中实现handle_save_company方法
+    - 实现handle_get_company方法
+    - 实现handle_get_all_companies方法
+    - 实现handle_delete_company方法（级联删除企业下的所有分类和标签）
+    - 实现handle_save_category_tag方法（验证仅第三层级分类可添加标签）
+    - 实现handle_get_category_tags方法
+    - 实现handle_delete_category_tag方法
+    - 更新handle_get_jd方法，自动加载关联的分类标签
+    - 更新handle_save_evaluation和handle_get_evaluation方法（支持手动修改记录）
+    - 实现handle_get_company_categories方法（获取企业的分类树）
+    - _需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14, 2.29, 2.30, 2.31, 2.32, 2.33_
   
   - [x] 5.7 实现协调Agent（CoordinatorAgent）
 
@@ -235,6 +272,49 @@
     - PUT /api/v1/categories/{id}/samples - 更新样本JD
     - DELETE /api/v1/categories/{id} - 删除分类
     - _需求: 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15_
+  
+  - [x] 7.1.6 实现企业管理API端点
+
+
+
+
+
+    - 在src/api/routers/中创建companies.py路由文件
+    - 实现POST /api/v1/companies端点（创建企业）
+    - 实现GET /api/v1/companies端点（列出所有企业）
+    - 实现GET /api/v1/companies/{company_id}端点（获取企业详情）
+    - 实现PUT /api/v1/companies/{company_id}端点（更新企业名称）
+    - 实现DELETE /api/v1/companies/{company_id}端点（删除企业，带确认提示）
+    - 实现GET /api/v1/companies/{company_id}/categories端点（列出企业的分类）
+    - 实现GET /api/v1/companies/{company_id}/categories/tree端点（获取企业的分类树）
+    - 在src/api/main.py中注册companies路由
+    - _需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10_
+  
+  - [x] 7.1.7 实现分类标签管理API端点
+
+
+
+
+  - [ ] 7.1.7 实现分类标签管理API端点
+    - 在src/api/routers/categories.py中实现POST /api/v1/categories/{category_id}/tags端点（为第三层级分类添加标签）
+    - 实现GET /api/v1/categories/{category_id}/tags端点（获取分类的所有标签）
+    - 在src/api/routers/中创建tags.py路由文件
+    - 实现PUT /api/v1/tags/{tag_id}端点（更新标签）
+    - 实现DELETE /api/v1/tags/{tag_id}端点（删除标签）
+    - 在src/api/main.py中注册tags路由
+    - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14_
+  
+-
+
+  - [x] 7.1.8 实现评估结果手动修改API端点
+
+
+    - 在src/api/routers/jd.py中实现PUT /api/v1/jd/{jd_id}/evaluation端点
+    - 支持修改overall_score、company_value、is_core_position字段
+    - 实现修改原因记录（reason参数）
+    - 实现修改历史查询（返回manual_modifications数组）
+    - 标识哪些结果是系统生成的，哪些是手动修改的（is_manually_modified字段）
+    - _需求: 2.29, 2.30, 2.31, 2.32, 2.33_
   
   - [x] 7.2 实现问卷相关API端点
 
@@ -310,6 +390,52 @@
     - 样本JD展示和管理
     - 编辑和删除分类功能
     - _需求: 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15_
+  -
+
+  - [x] 8.1.6 实现企业管理页面
+
+
+
+
+    - 在src/ui/app.py中添加"企业管理"页面选项
+    - 实现企业列表展示（使用st.dataframe或卡片形式）
+    - 实现创建企业表单（使用st.form，仅需企业名称输入）
+    - 实现企业详情页面（显示企业信息和职位分类体系）
+    - 实现编辑企业名称功能（使用st.text_input）
+    - 实现删除企业功能（使用st.button，带st.warning确认提示）
+    - 实现企业统计信息展示（使用st.metric显示分类数量、JD数量等）
+    - 调用API端点：GET /api/v1/companies, POST /api/v1/companies, PUT /api/v1/companies/{id}, DELETE /api/v1/companies/{id}
+    - _需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10_
+  
+-
+
+  - [x] 8.1.7 实现分类标签管理功能
+
+
+
+    - 在src/ui/app.py的职位分类管理页面中，为第三层级分类添加标签管理区域
+    - 实现添加标签表单（使用st.form，包含标签名称、类型、描述输入）
+    - 实现标签类型下拉选择（使用st.selectbox，选项：战略重要性、业务价值、技能稀缺性、市场竞争度、发展潜力、风险等级）
+    - 实现标签列表展示（使用st.expander或st.dataframe显示标签名称、类型、描述）
+    - 实现编辑和删除标签功能（使用st.button）
+    - 实现标签数量徽章显示（使用st.badge或st.metric）
+    - 调用API端点：POST /api/v1/categories/{id}/tags, GET /api/v1/categories/{id}/tags, PUT /api/v1/tags/{id}, DELETE /api/v1/tags/{id}
+    - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14_
+  
+
+  - [-] 8.1.8 增强JD评估页面以支持综合评估
+
+
+    - 在src/ui/app.py的JD分析页面评估结果中，添加三个维度贡献度展示（使用st.columns和st.metric）
+    - 展示企业价值评级（使用st.success/info/warning显示高价值/中价值/低价值）
+    - 展示核心岗位判断（使用st.checkbox或st.badge显示是/否）
+    - 展示分类标签对评估的影响说明（使用st.info或st.expander）
+    - 添加手动修改评估结果的功能（使用st.form，包含质量分数、企业价值、核心岗位判断的输入）
+    - 添加修改原因输入框（使用st.text_area）
+    - 展示修改历史记录（使用st.expander显示manual_modifications数组）
+    - 标识哪些结果是系统生成的，哪些是手动修改的（使用st.badge或颜色标识）
+    - 调用API端点：PUT /api/v1/jd/{id}/evaluation
+    - _需求: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11, 4.12, 4.13, 4.14, 2.29, 2.30, 2.31, 2.32, 2.33_
   
   - [x] 8.2 实现问卷生成和管理页面
 
@@ -405,9 +531,18 @@
     - 使用指南
     - _需求: 所有需求_
 
-- [ ] 11. 测试和优化
+- [x] 11. 测试和优化
+
+
+
+
+
+
+
 
   - [x] 11.1 编写Agent单元测试
+
+
 
 
 
@@ -423,7 +558,9 @@
     - 使用Mock LLM进行测试
     - _需求: 所有需求_
   
+
   - [x] 11.2 编写API集成测试
+
 
 
 
@@ -435,7 +572,9 @@
     - 测试文件格式验证和错误处理
     - _需求: 所有需求_
   
+
   - [x] 11.3 编写批量上传功能测试
+
 
 
 
@@ -452,6 +591,8 @@
     - 测试并发批量上传
     - _需求: 1.16, 1.17, 1.18, 1.19, 1.20, 1.21, 1.22_
   
+
+
   - [x] 11.4 性能优化
 
 
